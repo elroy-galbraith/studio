@@ -1,4 +1,3 @@
-
 // @/services/coaching-session-service.ts
 'use server';
 
@@ -44,4 +43,8 @@ export async function addCoachingSession(
       createdAt: serverTimestamp(),
     });
     return docRef.id;
-  } catch (error)
+  } catch (error) {
+    console.error('Error adding coaching session:', error);
+    throw new Error('Could not add coaching session.');
+  }
+}
