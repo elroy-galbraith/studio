@@ -1,3 +1,4 @@
+
 'use client';
 
 import * as React from 'react';
@@ -17,7 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { CalendarIcon, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { FormState } from '@/lib/actions'; // Use the FormState from actions
+import type { FormState } from '@/types'; 
 import { useToast } from '@/hooks/use-toast';
 
 // Client-side validation schema
@@ -41,10 +42,17 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
     resolver: zodResolver(transcriptFormSchema),
     defaultValues: {
       teamMemberName: '',
-      sessionDate: new Date(),
+      sessionDate: undefined, // Changed from new Date() to prevent hydration mismatch
       transcript: '',
     },
   });
+
+  React.useEffect(() => {
+    // Set the sessionDate to today only on the client-side after mount
+    // to avoid hydration mismatch.
+    form.setValue('sessionDate', new Date());
+  }, []); // Empty dependency array ensures this runs once on mount (client-side)
+
 
   React.useEffect(() => {
     // This effect handles displaying toasts based on server state changes
@@ -55,7 +63,11 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
             title: "Success!",
             description: currentServerState.message,
           });
-          form.reset(); // Reset form on successful submission from server
+          form.reset({ // Reset form fields, and re-apply client-side default for date
+            teamMemberName: '',
+            transcript: '',
+            sessionDate: new Date(), 
+          }); 
         } else { // Error (validation or processing)
           toast({
             variant: "destructive",
@@ -70,16 +82,13 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
   const handleClientSubmit = (data: TranscriptFormValues) => {
     const formData = new FormData();
     formData.append('teamMemberName', data.teamMemberName);
-    formData.append('sessionDate', data.sessionDate.toISOString());
+    // Ensure sessionDate is correctly stringified if it's a Date object
+    formData.append('sessionDate', data.sessionDate instanceof Date ? data.sessionDate.toISOString() : (data.sessionDate || new Date().toISOString()));
     formData.append('transcript', data.transcript);
     onFormSubmit(formData); // This calls the server action via the prop
   };
 
   return (
-    // Removed Card from here, parent page will provide Card styling if needed.
-    // Or wrap this form's content in a Card if it's meant to be self-contained visually.
-    // For now, assuming parent wraps it.
-    // Edit: Re-added Card as it's logical for the form to be a card.
     <Card className="w-full shadow-lg border-border/70">
       <CardHeader className="bg-muted/30 rounded-t-lg py-4 px-6">
         <CardTitle className="text-xl">New Coaching Session</CardTitle>
@@ -128,7 +137,7 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
                         selected={field.value}
                         onSelect={field.onChange}
                         initialFocus
-                        disabled={(date) => date > new Date() || date < new Date("1900-01-01")}
+                        disabled={(date) => date > new Date(new Date().setHours(23,59,59,999)) || date < new Date("1900-01-01")}
                       />
                     </PopoverContent>
                   </Popover>
@@ -178,7 +187,7 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
 }
 
 function SubmitButton() {
-  const { pending } = useFormStatus(); // This hook works with the <form> this button is in.
+  const { pending } = useFormStatus(); 
   return (
     <Button type="submit" disabled={pending} className="w-full md:w-auto transition-all duration-150 ease-in-out hover:shadow-md active:scale-[0.98]">
       {pending ? (
@@ -192,3 +201,4 @@ function SubmitButton() {
     </Button>
   );
 }
+
