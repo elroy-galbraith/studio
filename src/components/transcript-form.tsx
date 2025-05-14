@@ -16,16 +16,27 @@ import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { CalendarIcon, Loader2, AlertCircle } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { CalendarIcon, Loader2, AlertCircle, Users, UserPlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { FormState } from '@/types'; 
+import type { FormState, TeamMember } from '@/types'; 
 import { useToast } from '@/hooks/use-toast';
+import { fetchTeamMembersAction } from '@/lib/actions'; // Import the new action
 
 // Client-side validation schema
 const transcriptFormSchema = z.object({
-  teamMemberName: z.string().min(1, 'Team member name is required.'),
+  teamMemberId: z.string().min(1, 'Team member selection is required.'), // Will hold ID or 'new'
+  newTeamMemberName: z.string().optional(),
   sessionDate: z.date({ required_error: 'Session date is required.' }),
   transcript: z.string().min(50, 'Transcript must be at least 50 characters long to provide meaningful insights.'),
+}).superRefine((data, ctx) => {
+  if (data.teamMemberId === 'new' && (!data.newTeamMemberName || data.newTeamMemberName.trim() === '')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "New team member name is required if 'Add New' is selected.",
+      path: ['newTeamMemberName'], // Correct path for the error
+    });
+  }
 });
 
 type TranscriptFormValues = z.infer<typeof transcriptFormSchema>;
@@ -37,38 +48,58 @@ interface TranscriptFormProps {
 
 export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptFormProps) {
   const { toast } = useToast();
+  const [teamMembers, setTeamMembers] = React.useState<TeamMember[]>([]);
+  const [isLoadingTeamMembers, setIsLoadingTeamMembers] = React.useState(true);
 
   const form = useForm<TranscriptFormValues>({
     resolver: zodResolver(transcriptFormSchema),
     defaultValues: {
-      teamMemberName: '',
-      sessionDate: undefined, // Changed from new Date() to prevent hydration mismatch
+      teamMemberId: '',
+      newTeamMemberName: '',
+      sessionDate: undefined, 
       transcript: '',
     },
   });
 
+  const watchedTeamMemberId = form.watch('teamMemberId');
+
   React.useEffect(() => {
-    // Set the sessionDate to today only on the client-side after mount
-    // to avoid hydration mismatch.
     form.setValue('sessionDate', new Date());
-  }, []); // Empty dependency array ensures this runs once on mount (client-side)
+
+    const loadTeamMembers = async () => {
+      setIsLoadingTeamMembers(true);
+      try {
+        const members = await fetchTeamMembersAction();
+        setTeamMembers(members);
+      } catch (error) {
+        console.error("Failed to fetch team members:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Could not load team members. Please try again later.",
+        });
+      }
+      setIsLoadingTeamMembers(false);
+    };
+    loadTeamMembers();
+  }, [form, toast]);
 
 
   React.useEffect(() => {
-    // This effect handles displaying toasts based on server state changes
-    if (currentServerState?.timestamp) { // Check timestamp to ensure it's a new state
+    if (currentServerState?.timestamp) { 
       if (currentServerState.message) {
-        if (currentServerState.data) { // Success
+        if (currentServerState.data) { 
           toast({
             title: "Success!",
             description: currentServerState.message,
           });
-          form.reset({ // Reset form fields, and re-apply client-side default for date
-            teamMemberName: '',
+          form.reset({ 
+            teamMemberId: '',
+            newTeamMemberName: '',
             transcript: '',
             sessionDate: new Date(), 
           }); 
-        } else { // Error (validation or processing)
+        } else { 
           toast({
             variant: "destructive",
             title: currentServerState.issues && currentServerState.issues.length > 0 ? "Validation Error" : "Processing Error",
@@ -81,11 +112,13 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
   
   const handleClientSubmit = (data: TranscriptFormValues) => {
     const formData = new FormData();
-    formData.append('teamMemberName', data.teamMemberName);
-    // Ensure sessionDate is correctly stringified if it's a Date object
+    formData.append('teamMemberId', data.teamMemberId);
+    if (data.teamMemberId === 'new' && data.newTeamMemberName) {
+      formData.append('newTeamMemberName', data.newTeamMemberName);
+    }
     formData.append('sessionDate', data.sessionDate instanceof Date ? data.sessionDate.toISOString() : (data.sessionDate || new Date().toISOString()));
     formData.append('transcript', data.transcript);
-    onFormSubmit(formData); // This calls the server action via the prop
+    onFormSubmit(formData); 
   };
 
   return (
@@ -98,18 +131,72 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
         <form onSubmit={form.handleSubmit(handleClientSubmit)} className="space-y-6">
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="teamMemberName" className="font-medium">Team Member Name</Label>
-              <Input
-                id="teamMemberName"
-                {...form.register('teamMemberName')}
-                placeholder="e.g., Alex Johnson"
-                className={cn(form.formState.errors.teamMemberName ? 'border-destructive focus-visible:ring-destructive' : 'border-input')}
-                aria-invalid={!!form.formState.errors.teamMemberName}
+              <Label htmlFor="teamMemberId" className="font-medium">Team Member</Label>
+              <Controller
+                name="teamMemberId"
+                control={form.control}
+                render={({ field }) => (
+                  <Select 
+                    onValueChange={(value) => {
+                      field.onChange(value);
+                      if (value !== 'new') {
+                        form.setValue('newTeamMemberName', ''); // Clear new name if existing selected
+                        form.clearErrors('newTeamMemberName');
+                      }
+                    }} 
+                    value={field.value}
+                    disabled={isLoadingTeamMembers}
+                  >
+                    <SelectTrigger 
+                      id="teamMemberId" 
+                      className={cn(form.formState.errors.teamMemberId ? 'border-destructive focus-visible:ring-destructive' : 'border-input')}
+                      aria-invalid={!!form.formState.errors.teamMemberId}
+                    >
+                      <SelectValue placeholder={isLoadingTeamMembers ? "Loading members..." : "Select team member"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {isLoadingTeamMembers ? (
+                        <SelectItem value="loading" disabled>Loading...</SelectItem>
+                      ) : (
+                        <>
+                          <SelectItem value="new">
+                            <div className="flex items-center">
+                              <UserPlus className="mr-2 h-4 w-4" />
+                              Add New Team Member
+                            </div>
+                          </SelectItem>
+                          {teamMembers.map((member) => (
+                            <SelectItem key={member.id} value={member.id}>
+                              {member.name}
+                            </SelectItem>
+                          ))}
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
+                )}
               />
-              {form.formState.errors.teamMemberName && (
-                <p className="text-sm text-destructive">{form.formState.errors.teamMemberName.message}</p>
+              {form.formState.errors.teamMemberId && (
+                <p className="text-sm text-destructive">{form.formState.errors.teamMemberId.message}</p>
               )}
             </div>
+
+            {watchedTeamMemberId === 'new' && (
+              <div className="space-y-2 md:col-span-1"> {/* Occupies one column on medium screens */}
+                <Label htmlFor="newTeamMemberName" className="font-medium">New Team Member Name</Label>
+                <Input
+                  id="newTeamMemberName"
+                  {...form.register('newTeamMemberName')}
+                  placeholder="e.g., Alex Johnson"
+                  className={cn(form.formState.errors.newTeamMemberName ? 'border-destructive focus-visible:ring-destructive' : 'border-input')}
+                  aria-invalid={!!form.formState.errors.newTeamMemberName}
+                />
+                {form.formState.errors.newTeamMemberName && (
+                  <p className="text-sm text-destructive">{form.formState.errors.newTeamMemberName.message}</p>
+                )}
+              </div>
+            )}
+          
             <div className="space-y-2">
               <Label htmlFor="sessionDate" className="font-medium">Session Date</Label>
               <Controller
@@ -164,7 +251,6 @@ export function TranscriptForm({ onFormSubmit, currentServerState }: TranscriptF
             )}
           </div>
 
-          {/* Server-side validation issues display (issues from FormState) */}
           {currentServerState?.issues && currentServerState.issues.length > 0 && !currentServerState.data && (
             <Alert variant="destructive" className="mt-4">
               <AlertCircle className="h-4 w-4" />
@@ -201,4 +287,3 @@ function SubmitButton() {
     </Button>
   );
 }
-

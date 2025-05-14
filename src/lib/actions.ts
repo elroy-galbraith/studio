@@ -2,13 +2,25 @@
 'use server';
 import { extractCoachingInsights, type ExtractCoachingInsightsInput } from '@/ai/flows/extract-coaching-insights';
 import { z } from 'zod';
-import type { CoachingSessionResult, FormState } from '@/types'; // Updated import
-import { transcriptFormInitialState } from '@/types'; // Updated import
+import type { CoachingSessionResult, FormState, TeamMember } from '@/types';
+import { transcriptFormInitialState } from '@/types';
+import { addTeamMember, getTeamMemberById, getTeamMembers } from '@/services/team-member-service';
 
-const FormSchema = z.object({
+
+// Schema for the main form processing
+const ProcessTranscriptFormSchema = z.object({
   transcript: z.string().min(10, "Transcript must be at least 10 characters long."),
-  teamMemberName: z.string().min(1, "Team member name cannot be empty."),
+  teamMemberId: z.string().min(1, "Team member selection is required."), // Can be an ID or 'new'
+  newTeamMemberName: z.string().optional(),
   sessionDate: z.string().min(1, "Session date cannot be empty."), // ISO string
+}).superRefine((data, ctx) => {
+  if (data.teamMemberId === 'new' && (!data.newTeamMemberName || data.newTeamMemberName.trim() === '')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "New team member name is required when 'Add New' is selected.",
+      path: ['newTeamMemberName'],
+    });
+  }
 });
 
 
@@ -16,9 +28,10 @@ export async function processTranscriptAction(
   prevState: FormState | undefined,
   formData: FormData
 ): Promise<FormState> {
-  const validatedFields = FormSchema.safeParse({
+  const validatedFields = ProcessTranscriptFormSchema.safeParse({
     transcript: formData.get('transcript'),
-    teamMemberName: formData.get('teamMemberName'),
+    teamMemberId: formData.get('teamMemberId'),
+    newTeamMemberName: formData.get('newTeamMemberName'),
     sessionDate: formData.get('sessionDate'),
   });
 
@@ -26,19 +39,43 @@ export async function processTranscriptAction(
     return {
       message: "Invalid form data. Please check the fields and try again.",
       issues: validatedFields.error.flatten().fieldErrors ?
-        Object.values(validatedFields.error.flatten().fieldErrors).flat() :
-        ["Unknown validation error. Please ensure all fields are filled correctly."],
+        Object.values(validatedFields.error.flatten().fieldErrors).flat().concat(
+          validatedFields.error.flatten().formErrors
+        )
+        : ["Unknown validation error. Please ensure all fields are filled correctly."],
       timestamp: Date.now(),
     };
   }
 
-  const { transcript, teamMemberName, sessionDate } = validatedFields.data;
+  const { transcript, teamMemberId, newTeamMemberName, sessionDate } = validatedFields.data;
+  let actualTeamMemberName: string = '';
+  let currentTeamMemberId: string = teamMemberId; // To store the ID of newly created member
 
   try {
+    if (teamMemberId === 'new' && newTeamMemberName) {
+      const newMember = await addTeamMember(newTeamMemberName);
+      actualTeamMemberName = newMember.name;
+      currentTeamMemberId = newMember.id; // Use the new member's ID
+    } else if (teamMemberId !== 'new') {
+      const existingMember = await getTeamMemberById(teamMemberId);
+      if (existingMember) {
+        actualTeamMemberName = existingMember.name;
+      } else {
+        return {
+          message: `Selected team member with ID ${teamMemberId} not found.`,
+          timestamp: Date.now(),
+        };
+      }
+    } else {
+        // This case should ideally be caught by Zod validation, but as a fallback:
+         return {
+          message: "Invalid team member selection.",
+          timestamp: Date.now(),
+        };
+    }
+
     const insightsInput: ExtractCoachingInsightsInput = { transcript };
-    // console.log("Sending to AI:", insightsInput); // For debugging
     const insightsOutput = await extractCoachingInsights(insightsInput);
-    // console.log("Received from AI:", insightsOutput); // For debugging
 
     if (!insightsOutput || Object.keys(insightsOutput).length === 0) {
         return {
@@ -51,7 +88,7 @@ export async function processTranscriptAction(
       message: "Transcript processed successfully!",
       data: {
         ...insightsOutput,
-        teamMemberName,
+        teamMemberName: actualTeamMemberName,
         sessionDate,
         transcript,
       },
@@ -59,7 +96,6 @@ export async function processTranscriptAction(
     };
   } catch (error) {
     console.error("Error processing transcript:", error);
-    // Check if error is an object and has a message property
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       message: `Failed to process transcript: ${errorMessage}. Please try again.`,
@@ -68,5 +104,17 @@ export async function processTranscriptAction(
   }
 }
 
-// transcriptFormInitialState is now imported from @/types
-// FormState type is now imported from @/types
+/**
+ * Server action to fetch all team members.
+ * @returns A promise that resolves to an array of TeamMember objects.
+ */
+export async function fetchTeamMembersAction(): Promise<TeamMember[]> {
+  try {
+    return await getTeamMembers();
+  } catch (error) {
+    console.error("Error in fetchTeamMembersAction:", error);
+    // Depending on how you want to handle errors on the client,
+    // you might re-throw, or return an empty array, or an object indicating an error.
+    return []; 
+  }
+}
