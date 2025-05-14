@@ -1,0 +1,25 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Components Guide
+
+The project uses a component-based architecture with the following structure:
+
+## Main Components
+- [app-header.tsx](mdc:src/components/app-header.tsx) - Main application header
+- [coach-loop-logo.tsx](mdc:src/components/coach-loop-logo.tsx) - Logo component
+- [insights-display-card.tsx](mdc:src/components/insights-display-card.tsx) - Card for displaying insights
+- [transcript-form.tsx](mdc:src/components/transcript-form.tsx) - Form for handling transcripts
+- [action-item-card.tsx](mdc:src/components/action-item-card.tsx) - Card for displaying action items
+
+## UI Components
+The `ui/` directory contains reusable UI components that follow a consistent design system. These components are built using Tailwind CSS and should be used for maintaining design consistency across the application.
+
+When creating new components:
+1. Place reusable UI components in the `ui/` directory
+2. Place page-specific components in the `src/components` directory
+3. Follow the existing naming convention: `component-name.tsx`
+4. Use TypeScript for type safety
+5. Implement proper prop types and documentation

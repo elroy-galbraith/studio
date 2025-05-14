@@ -7,6 +7,32 @@ import type { TeamMember } from '@/types';
 
 const TEAM_MEMBERS_COLLECTION = 'teamMembers';
 
+// Helper function to convert Firestore data to plain objects
+function convertFirestoreData(data: any): any {
+  if (!data) return data;
+  
+  // Handle Timestamp objects
+  if (data instanceof Timestamp) {
+    return data.toDate();
+  }
+  
+  // Handle arrays
+  if (Array.isArray(data)) {
+    return data.map(convertFirestoreData);
+  }
+  
+  // Handle objects
+  if (typeof data === 'object') {
+    const converted: any = {};
+    for (const [key, value] of Object.entries(data)) {
+      converted[key] = convertFirestoreData(value);
+    }
+    return converted;
+  }
+  
+  return data;
+}
+
 /**
  * Adds a new team member to Firestore.
  * @param name - The name of the team member.
@@ -43,7 +69,8 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
     const querySnapshot = await getDocs(q);
     const members: TeamMember[] = [];
     querySnapshot.forEach((doc) => {
-      members.push({ id: doc.id, ...doc.data() } as TeamMember);
+      const data = convertFirestoreData(doc.data());
+      members.push({ id: doc.id, ...data } as TeamMember);
     });
     return members;
   } catch (error) {
@@ -66,7 +93,8 @@ export async function getTeamMemberById(id: string): Promise<TeamMember | null> 
     const docSnap = await getDoc(docRef);
 
     if (docSnap.exists()) {
-      return { id: docSnap.id, ...docSnap.data() } as TeamMember;
+      const data = convertFirestoreData(docSnap.data());
+      return { id: docSnap.id, ...data } as TeamMember;
     } else {
       return null;
     }

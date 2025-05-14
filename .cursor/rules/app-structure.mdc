@@ -1,0 +1,28 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# App Structure Guide
+
+The application follows Next.js 13+ App Router structure:
+
+## Core Files
+- [layout.tsx](mdc:src/app/layout.tsx) - Root layout component that wraps all pages
+- [page.tsx](mdc:src/app/page.tsx) - Main page component
+- [globals.css](mdc:src/app/globals.css) - Global styles and Tailwind imports
+- [favicon.ico](mdc:src/app/favicon.ico) - Site favicon
+
+## Routing Structure
+The app uses Next.js App Router, which means:
+- Each folder represents a route segment
+- `page.tsx` files define the UI for a route
+- `layout.tsx` files define shared layouts
+- Special files like `loading.tsx`, `error.tsx`, and `not-found.tsx` handle specific states
+
+## Best Practices
+1. Keep page components focused on layout and composition
+2. Move complex logic to custom hooks
+3. Use server components by default
+4. Add 'use client' directive only when client-side interactivity is needed
+5. Follow the file-based routing convention
