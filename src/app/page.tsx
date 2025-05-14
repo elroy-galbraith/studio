@@ -6,17 +6,17 @@ import { AppHeader } from '@/components/app-header';
 import { TranscriptForm } from '@/components/transcript-form';
 import { InsightsDisplayCard } from '@/components/insights-display-card';
 import { ActionItemsList } from '@/components/action-item-card';
-import type { CoachingSessionResult, ClientActionItem, FormState } from '@/types'; // FormState imported from @/types
-import { transcriptFormInitialState } from '@/types'; // transcriptFormInitialState imported from @/types
+import type { CoachingSessionResult, ClientActionItem, FormState } from '@/types'; 
+import { transcriptFormInitialState } from '@/types'; 
 import { useToast } from '@/hooks/use-toast';
 import { processTranscriptAction } from '@/lib/actions'; 
-import { useFormState } from 'react-dom'; 
+import { useActionState } from 'react'; 
 
 // Helper to generate unique IDs for client-side items
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 export default function HomePage() {
-  const [formState, formAction] = useFormState(processTranscriptAction, transcriptFormInitialState);
+  const [formState, formAction] = useActionState(processTranscriptAction, transcriptFormInitialState);
   const { toast } = useToast();
   
   const [processedData, setProcessedData] = React.useState<CoachingSessionResult | null>(null);
