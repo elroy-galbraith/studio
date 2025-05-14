@@ -1,9 +1,10 @@
+
 // @/services/coaching-session-service.ts
 'use server';
 
 import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
-import type { CoachingSessionResult } from '@/types';
+import { collection, addDoc, serverTimestamp, Timestamp, query, where, getDocs, orderBy } from 'firebase/firestore';
+import type { CoachingSessionResult, CoachingSession } from '@/types';
 
 const COACHING_SESSIONS_COLLECTION = 'coachingSessions';
 
@@ -39,12 +40,51 @@ export async function addCoachingSession(
       growthThemes: sessionData.growthThemes || [],
       skillsToDevelop: sessionData.skillsToDevelop || [],
       suggestedCoachingQuestions: sessionData.suggestedCoachingQuestions || [],
-      actionItems: sessionData.actionItems || [], // These are the AI-generated strings
+      actionItems: sessionData.actionItems || [],
       createdAt: serverTimestamp(),
     });
     return docRef.id;
   } catch (error) {
     console.error('Error adding coaching session:', error);
     throw new Error('Could not add coaching session.');
+  }
+}
+
+/**
+ * Fetches all coaching sessions for a specific team member, ordered by session date descending.
+ * @param teamMemberId - The ID of the team member.
+ * @returns A promise that resolves to an array of CoachingSession objects.
+ */
+export async function getCoachingSessionsByTeamMemberId(teamMemberId: string): Promise<CoachingSession[]> {
+  if (!teamMemberId || typeof teamMemberId !== 'string' || teamMemberId.trim() === '') {
+    throw new Error('Team member ID must be a non-empty string.');
+  }
+  try {
+    const sessionsQuery = query(
+      collection(db, COACHING_SESSIONS_COLLECTION),
+      where('teamMemberId', '==', teamMemberId.trim()),
+      orderBy('sessionDate', 'desc')
+    );
+    const querySnapshot = await getDocs(sessionsQuery);
+    const sessions: CoachingSession[] = [];
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      sessions.push({
+        id: doc.id,
+        teamMemberId: data.teamMemberId,
+        teamMemberName: data.teamMemberName,
+        sessionDate: (data.sessionDate as Timestamp).toDate().toISOString(),
+        transcript: data.transcript,
+        growthThemes: data.growthThemes,
+        skillsToDevelop: data.skillsToDevelop,
+        suggestedCoachingQuestions: data.suggestedCoachingQuestions,
+        actionItems: data.actionItems,
+        createdAt: (data.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(), // Handle potential null if serverTimestamp not resolved
+      } as CoachingSession);
+    });
+    return sessions;
+  } catch (error) {
+    console.error('Error fetching coaching sessions by team member ID:', error);
+    throw new Error('Could not fetch coaching sessions.');
   }
 }

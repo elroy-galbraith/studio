@@ -2,9 +2,10 @@
 'use server';
 import { extractCoachingInsights, type ExtractCoachingInsightsInput } from '@/ai/flows/extract-coaching-insights';
 import { z } from 'zod';
-import type { CoachingSessionResult, FormState, TeamMember } from '@/types';
+import type { CoachingSessionResult, FormState, TeamMember, TeamMemberDetailsAndSessions, CoachingSession } from '@/types';
 import { transcriptFormInitialState } from '@/types';
 import { addTeamMember, getTeamMemberById, getTeamMembers } from '@/services/team-member-service';
+import { addCoachingSession, getCoachingSessionsByTeamMemberId } from '@/services/coaching-session-service';
 
 
 // Schema for the main form processing
@@ -49,13 +50,13 @@ export async function processTranscriptAction(
 
   const { transcript, teamMemberId, newTeamMemberName, sessionDate } = validatedFields.data;
   let actualTeamMemberName: string = '';
-  let currentTeamMemberId: string = teamMemberId; // To store the ID of newly created member
+  let currentTeamMemberId: string = teamMemberId; 
 
   try {
     if (teamMemberId === 'new' && newTeamMemberName) {
       const newMember = await addTeamMember(newTeamMemberName);
       actualTeamMemberName = newMember.name;
-      currentTeamMemberId = newMember.id; // Use the new member's ID
+      currentTeamMemberId = newMember.id; 
     } else if (teamMemberId !== 'new') {
       const existingMember = await getTeamMemberById(teamMemberId);
       if (existingMember) {
@@ -67,7 +68,6 @@ export async function processTranscriptAction(
         };
       }
     } else {
-        // This case should ideally be caught by Zod validation, but as a fallback:
          return {
           message: "Invalid team member selection.",
           timestamp: Date.now(),
@@ -84,14 +84,19 @@ export async function processTranscriptAction(
         };
     }
     
+    const sessionResult: CoachingSessionResult = {
+      ...insightsOutput,
+      teamMemberName: actualTeamMemberName,
+      sessionDate, // This is already an ISO string
+      transcript,
+    };
+
+    // Save the coaching session to Firestore
+    await addCoachingSession(sessionResult, currentTeamMemberId);
+    
     return {
-      message: "Transcript processed successfully!",
-      data: {
-        ...insightsOutput,
-        teamMemberName: actualTeamMemberName,
-        sessionDate,
-        transcript,
-      },
+      message: "Transcript processed and session saved successfully!",
+      data: sessionResult,
       timestamp: Date.now(),
     };
   } catch (error) {
@@ -113,8 +118,29 @@ export async function fetchTeamMembersAction(): Promise<TeamMember[]> {
     return await getTeamMembers();
   } catch (error) {
     console.error("Error in fetchTeamMembersAction:", error);
-    // Depending on how you want to handle errors on the client,
-    // you might re-throw, or return an empty array, or an object indicating an error.
     return []; 
+  }
+}
+
+/**
+ * Server action to fetch a team member's details and all their coaching sessions.
+ * @param teamMemberId - The ID of the team member.
+ * @returns A promise that resolves to an object containing team member details and their sessions.
+ */
+export async function fetchTeamMemberDetailsAndSessionsAction(teamMemberId: string): Promise<TeamMemberDetailsAndSessions> {
+  try {
+    if (!teamMemberId) {
+      throw new Error("Team member ID is required.");
+    }
+    const teamMember = await getTeamMemberById(teamMemberId);
+    // No need to throw if teamMember is null, page can handle it
+    
+    const sessions = await getCoachingSessionsByTeamMemberId(teamMemberId);
+    
+    return { teamMember, sessions };
+  } catch (error) {
+    console.error("Error in fetchTeamMemberDetailsAndSessionsAction:", error);
+    // Return a structure that the page can handle as an error state or empty state
+    return { teamMember: null, sessions: [] };
   }
 }
