@@ -29,10 +29,12 @@ export async function processTranscriptAction(
   prevState: FormState | undefined,
   formData: FormData
 ): Promise<FormState> {
+  const rawNewTeamMemberName = formData.get('newTeamMemberName');
+
   const validatedFields = ProcessTranscriptFormSchema.safeParse({
     transcript: formData.get('transcript'),
     teamMemberId: formData.get('teamMemberId'),
-    newTeamMemberName: formData.get('newTeamMemberName'),
+    newTeamMemberName: rawNewTeamMemberName === null ? undefined : String(rawNewTeamMemberName), // Coerce null to undefined, and ensure it's a string if not null/undefined
     sessionDate: formData.get('sessionDate'),
   });
 
@@ -50,13 +52,13 @@ export async function processTranscriptAction(
 
   const { transcript, teamMemberId, newTeamMemberName, sessionDate } = validatedFields.data;
   let actualTeamMemberName: string = '';
-  let currentTeamMemberId: string = teamMemberId; 
+  let currentTeamMemberId: string = teamMemberId;
 
   try {
     if (teamMemberId === 'new' && newTeamMemberName) {
       const newMember = await addTeamMember(newTeamMemberName);
       actualTeamMemberName = newMember.name;
-      currentTeamMemberId = newMember.id; 
+      currentTeamMemberId = newMember.id;
     } else if (teamMemberId !== 'new') {
       const existingMember = await getTeamMemberById(teamMemberId);
       if (existingMember) {
@@ -83,7 +85,7 @@ export async function processTranscriptAction(
             timestamp: Date.now(),
         };
     }
-    
+
     const sessionResult: CoachingSessionResult = {
       ...insightsOutput,
       teamMemberName: actualTeamMemberName,
@@ -93,7 +95,7 @@ export async function processTranscriptAction(
 
     // Save the coaching session to Firestore
     await addCoachingSession(sessionResult, currentTeamMemberId);
-    
+
     return {
       message: "Transcript processed and session saved successfully!",
       data: sessionResult,
@@ -118,7 +120,7 @@ export async function fetchTeamMembersAction(): Promise<TeamMember[]> {
     return await getTeamMembers();
   } catch (error) {
     console.error("Error in fetchTeamMembersAction:", error);
-    return []; 
+    return [];
   }
 }
 
@@ -130,17 +132,21 @@ export async function fetchTeamMembersAction(): Promise<TeamMember[]> {
 export async function fetchTeamMemberDetailsAndSessionsAction(teamMemberId: string): Promise<TeamMemberDetailsAndSessions> {
   try {
     if (!teamMemberId) {
-      throw new Error("Team member ID is required.");
+      // This case should ideally be caught by client-side validation or routing
+      // but good to have a check.
+      console.warn("fetchTeamMemberDetailsAndSessionsAction called with no teamMemberId");
+      return { teamMember: null, sessions: [] };
     }
     const teamMember = await getTeamMemberById(teamMemberId);
-    // No need to throw if teamMember is null, page can handle it
+    // If teamMember is null, the page will handle displaying "not found".
     
     const sessions = await getCoachingSessionsByTeamMemberId(teamMemberId);
     
     return { teamMember, sessions };
   } catch (error) {
-    console.error("Error in fetchTeamMemberDetailsAndSessionsAction:", error);
+    console.error(`Error in fetchTeamMemberDetailsAndSessionsAction for ID ${teamMemberId}:`, error);
     // Return a structure that the page can handle as an error state or empty state
+    // Avoid throwing here so the page can render an error message gracefully.
     return { teamMember: null, sessions: [] };
   }
 }
