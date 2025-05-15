@@ -1,11 +1,13 @@
 
 'use server';
-import { extractCoachingInsights, type ExtractCoachingInsightsInput } from '@/ai/flows/extract-coaching-insights';
+import { extractCoachingInsights } from '@/ai/flows/extract-coaching-insights';
+import type { ExtractCoachingInsightsInput } from '@/types'; // Updated to use the type from types/index.ts
 import { z } from 'zod';
 import type { CoachingSessionResult, FormState, TeamMember, TeamMemberDetailsAndSessions, CoachingSession } from '@/types';
 import { transcriptFormInitialState } from '@/types';
 import { addTeamMember, getTeamMemberById, getTeamMembers } from '@/services/team-member-service';
 import { addCoachingSession, getCoachingSessionsByTeamMemberId } from '@/services/coaching-session-service';
+import { formatHistoricalContext } from '@/lib/utils';
 
 
 // Schema for the main form processing
@@ -34,7 +36,7 @@ export async function processTranscriptAction(
   const validatedFields = ProcessTranscriptFormSchema.safeParse({
     transcript: formData.get('transcript'),
     teamMemberId: formData.get('teamMemberId'),
-    newTeamMemberName: rawNewTeamMemberName === null ? undefined : String(rawNewTeamMemberName), // Coerce null to undefined, and ensure it's a string if not null/undefined
+    newTeamMemberName: rawNewTeamMemberName === null ? undefined : String(rawNewTeamMemberName),
     sessionDate: formData.get('sessionDate'),
   });
 
@@ -53,16 +55,21 @@ export async function processTranscriptAction(
   const { transcript, teamMemberId, newTeamMemberName, sessionDate } = validatedFields.data;
   let actualTeamMemberName: string = '';
   let currentTeamMemberId: string = teamMemberId;
+  let historicalSummary: string | null = null;
 
   try {
     if (teamMemberId === 'new' && newTeamMemberName) {
       const newMember = await addTeamMember(newTeamMemberName);
       actualTeamMemberName = newMember.name;
       currentTeamMemberId = newMember.id;
+      // No historical context for new members
     } else if (teamMemberId !== 'new') {
       const existingMember = await getTeamMemberById(teamMemberId);
       if (existingMember) {
         actualTeamMemberName = existingMember.name;
+        // Fetch recent sessions for historical context
+        const pastSessions = await getCoachingSessionsByTeamMemberId(currentTeamMemberId, 3); // Get last 3 sessions
+        historicalSummary = formatHistoricalContext(pastSessions);
       } else {
         return {
           message: `Selected team member with ID ${teamMemberId} not found.`,
@@ -76,8 +83,13 @@ export async function processTranscriptAction(
         };
     }
 
-    const insightsInput: ExtractCoachingInsightsInput = { transcript };
+    const insightsInput: ExtractCoachingInsightsInput = { 
+      transcript,
+      ...(historicalSummary && { historicalSummary }), 
+    };
+
     const insightsOutput = await extractCoachingInsights(insightsInput);
+
 
     if (!insightsOutput || Object.keys(insightsOutput).length === 0) {
         return {
@@ -87,13 +99,12 @@ export async function processTranscriptAction(
     }
 
     const sessionResult: CoachingSessionResult = {
-      ...insightsOutput,
+      ...insightsOutput, 
       teamMemberName: actualTeamMemberName,
-      sessionDate, // This is already an ISO string
+      sessionDate, 
       transcript,
     };
 
-    // Save the coaching session to Firestore
     await addCoachingSession(sessionResult, currentTeamMemberId);
 
     return {
@@ -132,21 +143,15 @@ export async function fetchTeamMembersAction(): Promise<TeamMember[]> {
 export async function fetchTeamMemberDetailsAndSessionsAction(teamMemberId: string): Promise<TeamMemberDetailsAndSessions> {
   try {
     if (!teamMemberId) {
-      // This case should ideally be caught by client-side validation or routing
-      // but good to have a check.
       console.warn("fetchTeamMemberDetailsAndSessionsAction called with no teamMemberId");
       return { teamMember: null, sessions: [] };
     }
-    const teamMember = await getTeamMemberById(teamMemberId);
-    // If teamMember is null, the page will handle displaying "not found".
-    
-    const sessions = await getCoachingSessionsByTeamMemberId(teamMemberId);
+    const teamMember = await getTeamMemberById(teamMemberId);    
+    const sessions = await getCoachingSessionsByTeamMemberId(teamMemberId); // Fetches all sessions for display page
     
     return { teamMember, sessions };
   } catch (error) {
     console.error(`Error in fetchTeamMemberDetailsAndSessionsAction for ID ${teamMemberId}:`, error);
-    // Return a structure that the page can handle as an error state or empty state
-    // Avoid throwing here so the page can render an error message gracefully.
     return { teamMember: null, sessions: [] };
   }
 }

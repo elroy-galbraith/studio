@@ -3,7 +3,7 @@
 'use server';
 
 import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp, Timestamp, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, Timestamp, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import type { CoachingSessionResult, CoachingSession } from '@/types';
 
 const COACHING_SESSIONS_COLLECTION = 'coachingSessions';
@@ -51,20 +51,27 @@ export async function addCoachingSession(
 }
 
 /**
- * Fetches all coaching sessions for a specific team member, ordered by session date descending.
+ * Fetches coaching sessions for a specific team member, ordered by session date descending.
+ * Can be limited to a certain number of recent sessions.
  * @param teamMemberId - The ID of the team member.
+ * @param count - Optional number of recent sessions to fetch. If not provided, fetches all.
  * @returns A promise that resolves to an array of CoachingSession objects.
  */
-export async function getCoachingSessionsByTeamMemberId(teamMemberId: string): Promise<CoachingSession[]> {
+export async function getCoachingSessionsByTeamMemberId(teamMemberId: string, count?: number): Promise<CoachingSession[]> {
   if (!teamMemberId || typeof teamMemberId !== 'string' || teamMemberId.trim() === '') {
     throw new Error('Team member ID must be a non-empty string.');
   }
   try {
-    const sessionsQuery = query(
+    let sessionsQuery = query(
       collection(db, COACHING_SESSIONS_COLLECTION),
       where('teamMemberId', '==', teamMemberId.trim()),
       orderBy('sessionDate', 'desc')
     );
+
+    if (count && count > 0) {
+      sessionsQuery = query(sessionsQuery, limit(count));
+    }
+
     const querySnapshot = await getDocs(sessionsQuery);
     const sessions: CoachingSession[] = [];
     querySnapshot.forEach((doc) => {
