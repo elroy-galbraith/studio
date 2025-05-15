@@ -34,25 +34,27 @@ export async function addCoachingSession(
 
   try {
     const actionItemsForStorage = sessionData.actionItems.map(item => ({
-      ...item,
+      id: item.id,
+      description: item.description,
+      status: item.status,
       dueDate: item.dueDate?.toISOString(), // Convert Date to ISO string for storage
-      teamMemberName: undefined, // Not storing this per action item in this collection
+      // teamMemberName is not stored per action item in this collection
     }));
 
 
-    const docData: Omit<CoachingSessionForStorage, 'createdAt'> = {
+    const docData: Omit<CoachingSessionForStorage, 'createdAt' | 'teamMemberName'> = { // teamMemberName is part of sessionData but not directly in CoachingSessionForStorage root
       teamMemberId: teamMemberId.trim(),
-      teamMemberName: sessionData.teamMemberName,
       sessionDate: Timestamp.fromDate(new Date(sessionData.sessionDate)),
       transcript: sessionData.transcript,
       growthThemes: sessionData.growthThemes || [],
       skillsToDevelop: sessionData.skillsToDevelop || [],
       suggestedCoachingQuestions: sessionData.suggestedCoachingQuestions || [],
-      actionItems: actionItemsForStorage as any, // Cast because teamMemberName is removed
+      actionItems: actionItemsForStorage,
     };
 
     const docRef = await addDoc(collection(db, COACHING_SESSIONS_COLLECTION), {
       ...docData,
+      teamMemberName: sessionData.teamMemberName, // Ensure teamMemberName is stored at the session level
       createdAt: serverTimestamp(),
     });
     return docRef.id;
@@ -88,11 +90,34 @@ export async function getCoachingSessionsByTeamMemberId(teamMemberId: string, co
     const sessions: CoachingSession[] = [];
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data();
-      const actionItems = (data.actionItems || []).map((item: any) => ({
-        ...item,
-        dueDate: item.dueDate ? new Date(item.dueDate) : undefined, // Convert ISO string back to Date
-        teamMemberName: data.teamMemberName, // Add teamMemberName for context on client
-      }));
+
+      // Robust action item mapping
+      const rawActionItems = data.actionItems || [];
+      const mappedActionItems: ClientActionItem[] = rawActionItems.map((actionItemData: any, index: number) => {
+        const teamMemberNameForActionItem = data.teamMemberName || 'Unknown Member'; // Fallback for teamMemberName
+
+        if (typeof actionItemData === 'string') {
+          // Handle old data: action item is just a string description
+          return {
+            id: `fallback-${docSnap.id}-${index}`, // Generate a predictable fallback ID for display
+            description: actionItemData,
+            status: 'open' as const, // Default status
+            dueDate: undefined,
+            teamMemberName: teamMemberNameForActionItem,
+          };
+        } else if (typeof actionItemData === 'object' && actionItemData !== null) {
+          // Handle new data: action item is an object
+          return {
+            id: actionItemData.id || `fallback-${docSnap.id}-${index}`, // Use existing ID or fallback
+            description: actionItemData.description || 'No description provided',
+            status: actionItemData.status || ('open' as const),
+            dueDate: actionItemData.dueDate ? new Date(actionItemData.dueDate) : undefined,
+            teamMemberName: teamMemberNameForActionItem,
+          };
+        }
+        // If it's neither a string nor a valid object, it will be filtered out
+        return null; 
+      }).filter((item): item is ClientActionItem => item !== null); // Filter out nulls and assert type
 
       sessions.push({
         id: docSnap.id,
@@ -103,9 +128,9 @@ export async function getCoachingSessionsByTeamMemberId(teamMemberId: string, co
         growthThemes: data.growthThemes,
         skillsToDevelop: data.skillsToDevelop,
         suggestedCoachingQuestions: data.suggestedCoachingQuestions,
-        actionItems: actionItems,
+        actionItems: mappedActionItems,
         createdAt: (data.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
-      } as CoachingSession);
+      });
     });
     return sessions;
   } catch (error) {
@@ -123,18 +148,19 @@ export async function updateCoachingSessionActionItems(sessionId: string, action
   if (!sessionId) {
     throw new Error('Session ID must be provided.');
   }
-  if (!actionItems) {
+  if (!actionItems) { // Array can be empty, but not null/undefined itself
     throw new Error('Action items array must be provided.');
   }
 
   try {
     const sessionRef = doc(db, COACHING_SESSIONS_COLLECTION, sessionId);
+    // Ensure actionItems are structured correctly for storage, especially converting Date to ISO string
     const actionItemsForStorage = actionItems.map(item => ({
       id: item.id,
       description: item.description,
       status: item.status,
       dueDate: item.dueDate?.toISOString(), // Convert Date to ISO string
-      // teamMemberName is not part of the stored action item structure itself
+      // teamMemberName is not part of the stored action item structure in the session document's array
     }));
     await updateDoc(sessionRef, {
       actionItems: actionItemsForStorage,
