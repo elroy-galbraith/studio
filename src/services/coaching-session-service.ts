@@ -3,25 +3,26 @@
 'use server';
 
 import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp, Timestamp, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
-import type { CoachingSessionResult, CoachingSession } from '@/types';
+import { collection, addDoc, serverTimestamp, Timestamp, query, where, getDocs, orderBy, limit, doc, updateDoc } from 'firebase/firestore';
+import type { CoachingSessionResult, CoachingSession, ClientActionItem } from '@/types';
 
 const COACHING_SESSIONS_COLLECTION = 'coachingSessions';
 
-export interface CoachingSessionForStorage extends Omit<CoachingSessionResult, 'sessionDate'> {
+interface CoachingSessionForStorage extends Omit<CoachingSessionResult, 'sessionDate' | 'actionItems' | 'id'> {
   teamMemberId: string;
   sessionDate: Timestamp; // Stored as Firestore Timestamp
+  actionItems: Omit<ClientActionItem, 'dueDate' | 'teamMemberName'> & { dueDate?: string }[]; // dueDate as ISO string
   createdAt: Timestamp; // Firestore server timestamp
 }
 
 /**
  * Adds a new coaching session to Firestore.
- * @param sessionData - The coaching session data to store.
+ * @param sessionData - The coaching session data to store (actionItems are already ClientActionItem[]).
  * @param teamMemberId - The ID of the team member associated with this session.
  * @returns The ID of the newly created coaching session document.
  */
 export async function addCoachingSession(
-  sessionData: CoachingSessionResult,
+  sessionData: CoachingSessionResult, // Expects actionItems to be ClientActionItem[]
   teamMemberId: string
 ): Promise<string> {
   if (!teamMemberId || typeof teamMemberId !== 'string' || teamMemberId.trim() === '') {
@@ -32,15 +33,26 @@ export async function addCoachingSession(
   }
 
   try {
-    const docRef = await addDoc(collection(db, COACHING_SESSIONS_COLLECTION), {
+    const actionItemsForStorage = sessionData.actionItems.map(item => ({
+      ...item,
+      dueDate: item.dueDate?.toISOString(), // Convert Date to ISO string for storage
+      teamMemberName: undefined, // Not storing this per action item in this collection
+    }));
+
+
+    const docData: Omit<CoachingSessionForStorage, 'createdAt'> = {
       teamMemberId: teamMemberId.trim(),
       teamMemberName: sessionData.teamMemberName,
-      sessionDate: Timestamp.fromDate(new Date(sessionData.sessionDate)), // Convert ISO string to Firestore Timestamp
+      sessionDate: Timestamp.fromDate(new Date(sessionData.sessionDate)),
       transcript: sessionData.transcript,
       growthThemes: sessionData.growthThemes || [],
       skillsToDevelop: sessionData.skillsToDevelop || [],
       suggestedCoachingQuestions: sessionData.suggestedCoachingQuestions || [],
-      actionItems: sessionData.actionItems || [],
+      actionItems: actionItemsForStorage as any, // Cast because teamMemberName is removed
+    };
+
+    const docRef = await addDoc(collection(db, COACHING_SESSIONS_COLLECTION), {
+      ...docData,
       createdAt: serverTimestamp(),
     });
     return docRef.id;
@@ -74,10 +86,16 @@ export async function getCoachingSessionsByTeamMemberId(teamMemberId: string, co
 
     const querySnapshot = await getDocs(sessionsQuery);
     const sessions: CoachingSession[] = [];
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const actionItems = (data.actionItems || []).map((item: any) => ({
+        ...item,
+        dueDate: item.dueDate ? new Date(item.dueDate) : undefined, // Convert ISO string back to Date
+        teamMemberName: data.teamMemberName, // Add teamMemberName for context on client
+      }));
+
       sessions.push({
-        id: doc.id,
+        id: docSnap.id,
         teamMemberId: data.teamMemberId,
         teamMemberName: data.teamMemberName,
         sessionDate: (data.sessionDate as Timestamp).toDate().toISOString(),
@@ -85,13 +103,44 @@ export async function getCoachingSessionsByTeamMemberId(teamMemberId: string, co
         growthThemes: data.growthThemes,
         skillsToDevelop: data.skillsToDevelop,
         suggestedCoachingQuestions: data.suggestedCoachingQuestions,
-        actionItems: data.actionItems,
-        createdAt: (data.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(), // Handle potential null if serverTimestamp not resolved
+        actionItems: actionItems,
+        createdAt: (data.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
       } as CoachingSession);
     });
     return sessions;
   } catch (error) {
     console.error('Error fetching coaching sessions by team member ID:', error);
     throw new Error('Could not fetch coaching sessions.');
+  }
+}
+
+/**
+ * Updates the action items for a specific coaching session in Firestore.
+ * @param sessionId - The ID of the coaching session document.
+ * @param actionItems - The array of ClientActionItem objects to set.
+ */
+export async function updateCoachingSessionActionItems(sessionId: string, actionItems: ClientActionItem[]): Promise<void> {
+  if (!sessionId) {
+    throw new Error('Session ID must be provided.');
+  }
+  if (!actionItems) {
+    throw new Error('Action items array must be provided.');
+  }
+
+  try {
+    const sessionRef = doc(db, COACHING_SESSIONS_COLLECTION, sessionId);
+    const actionItemsForStorage = actionItems.map(item => ({
+      id: item.id,
+      description: item.description,
+      status: item.status,
+      dueDate: item.dueDate?.toISOString(), // Convert Date to ISO string
+      // teamMemberName is not part of the stored action item structure itself
+    }));
+    await updateDoc(sessionRef, {
+      actionItems: actionItemsForStorage,
+    });
+  } catch (error) {
+    console.error('Error updating action items in session:', error);
+    throw new Error('Could not update action items.');
   }
 }

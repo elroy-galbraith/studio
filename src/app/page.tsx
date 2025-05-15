@@ -9,46 +9,67 @@ import { ActionItemsList } from '@/components/action-item-card';
 import type { CoachingSessionResult, ClientActionItem, FormState } from '@/types';
 import { transcriptFormInitialState } from '@/types';
 import { useToast } from '@/hooks/use-toast';
-import { processTranscriptAction } from '@/lib/actions';
-import { useActionState, startTransition } from 'react'; // Import startTransition
-
-// Helper to generate unique IDs for client-side items
-const generateId = () => Math.random().toString(36).substr(2, 9);
+import { processTranscriptAction, updateActionItemsAction } from '@/lib/actions';
+import { useActionState, startTransition } from 'react';
 
 export default function HomePage() {
   const [formState, formAction] = useActionState(processTranscriptAction, transcriptFormInitialState);
   const { toast } = useToast();
 
+  const [currentSessionId, setCurrentSessionId] = React.useState<string | null>(null);
   const [processedData, setProcessedData] = React.useState<CoachingSessionResult | null>(null);
   const [clientActionItems, setClientActionItems] = React.useState<ClientActionItem[]>([]);
 
   React.useEffect(() => {
-    if (formState?.timestamp) {
+    if (formState?.timestamp) { // Indicates a new state from the server action
       if (formState.data) {
         setProcessedData(formState.data);
-        const initialClientActionItems = formState.data.actionItems.map((desc, index) => ({
-          id: generateId(),
-          description: desc,
-          status: 'open' as const,
-          teamMemberName: formState.data!.teamMemberName,
-        }));
-        setClientActionItems(initialClientActionItems);
+        setCurrentSessionId(formState.data.id || null); // Store the session ID
+        // Action items are now already ClientActionItem[] from the server action
+        setClientActionItems(formState.data.actionItems || []);
       } else {
+        // Error or no data, clear out old data
         setProcessedData(null);
+        setCurrentSessionId(null);
         setClientActionItems([]);
       }
     }
   }, [formState]);
 
 
-  const handleUpdateActionItem = (updatedItem: ClientActionItem) => {
-    setClientActionItems((prevItems) =>
-      prevItems.map((item) => (item.id === updatedItem.id ? updatedItem : item))
+  const handleUpdateActionItem = async (updatedItem: ClientActionItem) => {
+    const newActionItems = clientActionItems.map((item) =>
+      item.id === updatedItem.id ? updatedItem : item
     );
-    toast({
-      title: "Action Item Updated",
-      description: `Status for "${updatedItem.description.substring(0,30)}..." updated.`,
-    });
+    setClientActionItems(newActionItems);
+
+    if (currentSessionId) {
+      startTransition(async () => {
+        const result = await updateActionItemsAction(currentSessionId, newActionItems);
+        if (result.success) {
+          toast({
+            title: "Action Item Updated",
+            description: `Status for "${updatedItem.description.substring(0,30)}..." updated and saved.`,
+          });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Save Error",
+            description: result.message || "Could not save action item changes.",
+          });
+          // Optionally, revert optimistic update here if save fails
+          // For now, we'll keep the client state as is, assuming user might retry or it's a transient error.
+        }
+      });
+    } else {
+      // This case should ideally not happen if UI is structured well,
+      // but good for a fallback notification.
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Session ID not found. Cannot save action item changes.",
+      });
+    }
   };
 
   return (
@@ -65,7 +86,10 @@ export default function HomePage() {
           </p>
           <TranscriptForm
             onFormSubmit={(formData) => {
-              startTransition(() => { // Wrap the call to formAction
+              startTransition(() => {
+                setProcessedData(null); // Clear previous results immediately
+                setCurrentSessionId(null);
+                setClientActionItems([]);
                 formAction(formData);
               });
             }}
@@ -76,6 +100,7 @@ export default function HomePage() {
         {processedData && (
           <div className="mt-12 space-y-8">
             <InsightsDisplayCard insights={processedData} />
+            {/* ActionItemsList now receives ClientActionItem[] directly */}
             <ActionItemsList items={clientActionItems} onUpdateItem={handleUpdateActionItem} />
           </div>
         )}

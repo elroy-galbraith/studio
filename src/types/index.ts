@@ -9,48 +9,50 @@ export type TeamMember = {
 
 export type ActionItemStatus = 'open' | 'in progress' | 'done';
 
-// Represents an action item string from AI, enhanced on client-side
+// Represents an action item on the client and for storage
 export type ClientActionItem = {
-  id: string;
+  id: string; // Unique ID for the action item
   description: string;
   status: ActionItemStatus;
-  dueDate?: Date;
-  teamMemberName: string;
+  dueDate?: Date; // Stored as ISO string in Firestore, Date object on client
+  teamMemberName: string; // Denormalized for context if needed, though primarily associated with session
 };
 
-// This is the direct output from the Genkit flow, which might include historicalSummary
+// This is the input type for the Genkit flow
 export interface ExtractCoachingInsightsInput extends GenkitExtractCoachingInsightsOutput {
   transcript: string;
-  historicalSummary?: string; // Added for historical context
+  historicalSummary?: string;
 }
 
-// This is the result after processing, including team member name and session date,
-// and it's also what's stored in Firestore (minus historicalSummary which is transient for the call)
-export type CoachingSessionResult = GenkitExtractCoachingInsightsOutput & {
+// This is the result after AI processing and initial transformation within the server action
+// It's what's saved to Firestore (actionItems will be ClientActionItem[]) and returned to the form
+export type CoachingSessionResult = Omit<GenkitExtractCoachingInsightsOutput, 'actionItems'> & {
+  id?: string; // Firestore document ID of the session, added after saving
   teamMemberName: string;
   sessionDate: string; // ISO string
   transcript: string;
+  actionItems: ClientActionItem[]; // Transformed from string[] to ClientActionItem[]
 };
 
 // Represents a coaching session as stored and retrieved from Firestore
-export interface CoachingSession extends Omit<CoachingSessionResult, 'growthThemes' | 'skillsToDevelop' | 'suggestedCoachingQuestions' | 'actionItems'> {
+export interface CoachingSession {
   id: string; // Firestore document ID
   teamMemberId: string;
-  // sessionDate is already an ISO string in CoachingSessionResult
-  createdAt: string; // ISO string from Firestore Timestamp
-  // Make insight fields optional as older records might not have them or they might be empty
+  teamMemberName: string;
+  sessionDate: string; // ISO string
+  transcript: string;
   growthThemes?: string[];
   skillsToDevelop?: string[];
   suggestedCoachingQuestions?: string[];
-  actionItems?: string[];
-  transcript: string; // Ensure transcript is part of stored session
+  actionItems?: ClientActionItem[]; // Now an array of rich objects
+  createdAt: string; // ISO string from Firestore Timestamp
 }
 
 // Form state for the transcript submission
 export type FormState = {
   message?: string;
   issues?: string[];
-  data?: CoachingSessionResult; // This is the data returned to the form after AI processing
+  data?: CoachingSessionResult; // This now contains ClientActionItem[] and the session ID
   timestamp?: number;
 };
 
@@ -66,4 +68,3 @@ export type TeamMemberDetailsAndSessions = {
   teamMember: TeamMember | null;
   sessions: CoachingSession[];
 };
-

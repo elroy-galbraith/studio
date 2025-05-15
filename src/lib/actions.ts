@@ -1,19 +1,19 @@
 
 'use server';
 import { extractCoachingInsights } from '@/ai/flows/extract-coaching-insights';
-import type { ExtractCoachingInsightsInput } from '@/types'; // Updated to use the type from types/index.ts
+import type { ExtractCoachingInsightsInput, CoachingSessionResult as AppCoachingSessionResult, ClientActionItem } from '@/types';
 import { z } from 'zod';
-import type { CoachingSessionResult, FormState, TeamMember, TeamMemberDetailsAndSessions, CoachingSession } from '@/types';
-import { transcriptFormInitialState } from '@/types';
+import type { FormState, TeamMember, TeamMemberDetailsAndSessions } from '@/types';
+import { transcriptFormInitialState } from '@/types'; // Keep this if other actions might use it, or define locally
 import { addTeamMember, getTeamMemberById, getTeamMembers } from '@/services/team-member-service';
-import { addCoachingSession, getCoachingSessionsByTeamMemberId } from '@/services/coaching-session-service';
+import { addCoachingSession, getCoachingSessionsByTeamMemberId, updateCoachingSessionActionItems as updateSessionActionItemsService } from '@/services/coaching-session-service';
 import { formatHistoricalContext } from '@/lib/utils';
 
 
 // Schema for the main form processing
 const ProcessTranscriptFormSchema = z.object({
   transcript: z.string().min(10, "Transcript must be at least 10 characters long."),
-  teamMemberId: z.string().min(1, "Team member selection is required."), // Can be an ID or 'new'
+  teamMemberId: z.string().min(1, "Team member selection is required."),
   newTeamMemberName: z.string().optional(),
   sessionDate: z.string().min(1, "Session date cannot be empty."), // ISO string
 }).superRefine((data, ctx) => {
@@ -62,70 +62,62 @@ export async function processTranscriptAction(
       const newMember = await addTeamMember(newTeamMemberName);
       actualTeamMemberName = newMember.name;
       currentTeamMemberId = newMember.id;
-      // No historical context for new members
     } else if (teamMemberId !== 'new') {
       const existingMember = await getTeamMemberById(teamMemberId);
       if (existingMember) {
         actualTeamMemberName = existingMember.name;
-        // Fetch recent sessions for historical context
-        const pastSessions = await getCoachingSessionsByTeamMemberId(currentTeamMemberId, 3); // Get last 3 sessions
+        const pastSessions = await getCoachingSessionsByTeamMemberId(currentTeamMemberId, 3);
         historicalSummary = formatHistoricalContext(pastSessions);
       } else {
-        return {
-          message: `Selected team member with ID ${teamMemberId} not found.`,
-          timestamp: Date.now(),
-        };
+        return { message: `Selected team member with ID ${teamMemberId} not found.`, timestamp: Date.now() };
       }
     } else {
-         return {
-          message: "Invalid team member selection.",
-          timestamp: Date.now(),
-        };
+      return { message: "Invalid team member selection.", timestamp: Date.now() };
     }
 
-    const insightsInput: ExtractCoachingInsightsInput = { 
+    const insightsInput: ExtractCoachingInsightsInput = {
       transcript,
-      ...(historicalSummary && { historicalSummary }), 
+      ...(historicalSummary && { historicalSummary }),
     };
 
-    const insightsOutput = await extractCoachingInsights(insightsInput);
+    const aiOutput = await extractCoachingInsights(insightsInput);
 
-
-    if (!insightsOutput || Object.keys(insightsOutput).length === 0) {
-        return {
-            message: "AI processing returned no insights. The transcript might be too short or unclear.",
-            timestamp: Date.now(),
-        };
+    if (!aiOutput || Object.keys(aiOutput).length === 0) {
+      return { message: "AI processing returned no insights. The transcript might be too short or unclear.", timestamp: Date.now() };
     }
 
-    const sessionResult: CoachingSessionResult = {
-      ...insightsOutput, 
+    // Transform string action items from AI into ClientActionItem objects
+    const structuredActionItems: ClientActionItem[] = (aiOutput.actionItems || []).map(desc => ({
+      id: crypto.randomUUID(), // Generate unique ID for each action item
+      description: desc,
+      status: 'open' as const,
+      teamMemberName: actualTeamMemberName, // Add teamMemberName for client-side context
+      // dueDate is initially undefined
+    }));
+
+    const sessionResult: AppCoachingSessionResult = {
+      ...aiOutput,
+      actionItems: structuredActionItems, // Use the structured action items
       teamMemberName: actualTeamMemberName,
-      sessionDate, 
+      sessionDate,
       transcript,
     };
 
-    await addCoachingSession(sessionResult, currentTeamMemberId);
+    const sessionId = await addCoachingSession(sessionResult, currentTeamMemberId);
+    sessionResult.id = sessionId; // Add the Firestore session ID to the result
 
     return {
       message: "Transcript processed and session saved successfully!",
-      data: sessionResult,
+      data: sessionResult, // This now includes the session ID and structured action items
       timestamp: Date.now(),
     };
   } catch (error) {
     console.error("Error processing transcript:", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
-    return {
-      message: `Failed to process transcript: ${errorMessage}. Please try again.`,
-      timestamp: Date.now(),
-    };
+    return { message: `Failed to process transcript: ${errorMessage}. Please try again.`, timestamp: Date.now() };
   }
 }
 
-/**
- * Server action to fetch all team members.
- * @returns A promise that resolves to an array of TeamMember objects.
- */
 export async function fetchTeamMembersAction(): Promise<TeamMember[]> {
   try {
     return await getTeamMembers();
@@ -135,23 +127,38 @@ export async function fetchTeamMembersAction(): Promise<TeamMember[]> {
   }
 }
 
-/**
- * Server action to fetch a team member's details and all their coaching sessions.
- * @param teamMemberId - The ID of the team member.
- * @returns A promise that resolves to an object containing team member details and their sessions.
- */
 export async function fetchTeamMemberDetailsAndSessionsAction(teamMemberId: string): Promise<TeamMemberDetailsAndSessions> {
   try {
     if (!teamMemberId) {
       console.warn("fetchTeamMemberDetailsAndSessionsAction called with no teamMemberId");
       return { teamMember: null, sessions: [] };
     }
-    const teamMember = await getTeamMemberById(teamMemberId);    
-    const sessions = await getCoachingSessionsByTeamMemberId(teamMemberId); // Fetches all sessions for display page
-    
+    const teamMember = await getTeamMemberById(teamMemberId);
+    const sessions = await getCoachingSessionsByTeamMemberId(teamMemberId);
     return { teamMember, sessions };
   } catch (error) {
     console.error(`Error in fetchTeamMemberDetailsAndSessionsAction for ID ${teamMemberId}:`, error);
     return { teamMember: null, sessions: [] };
+  }
+}
+
+export async function updateActionItemsAction(
+  sessionId: string,
+  actionItems: ClientActionItem[]
+): Promise<{ success: boolean; message?: string }> {
+  if (!sessionId) {
+    return { success: false, message: "Session ID is required." };
+  }
+  if (!actionItems) {
+    return { success: false, message: "Action items are required." };
+  }
+
+  try {
+    await updateSessionActionItemsService(sessionId, actionItems);
+    return { success: true, message: "Action items updated successfully." };
+  } catch (error) {
+    console.error("Error in updateActionItemsAction:", error);
+    const errorMessage = error instanceof Error ? error.message : "Failed to update action items.";
+    return { success: false, message: errorMessage };
   }
 }
