@@ -136,8 +136,10 @@ export function PastSessionCard({ session }: PastSessionCardProps) {
               </AccordionTrigger>
               <AccordionContent>
                 <ul className="space-y-3">
-                  {session.actionItems.map((item) => (
-                    <ActionItemDisplay key={item.id} item={item} />
+                  {session.actionItems
+                    .filter(item => item && typeof item.id !== 'undefined') // Ensure item and item.id are valid
+                    .map((item) => (
+                      <ActionItemDisplay key={item.id} item={item} />
                   ))}
                 </ul>
               </AccordionContent>
